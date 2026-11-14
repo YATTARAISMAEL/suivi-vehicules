@@ -62,6 +62,31 @@ label{display:block;font-size:12px;font-weight:700;color:var(--mut);margin:10px 
 nav{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);display:flex;padding:6px 6px calc(6px + env(safe-area-inset-bottom));z-index:6}
 nav button{flex:1;border:0;background:none;font:inherit;font-size:11px;font-weight:700;color:var(--mut);padding:6px 0;display:flex;flex-direction:column;align-items:center;gap:3px;border-radius:10px}
 nav button svg{width:22px;height:22px}
+nav button{font-size:10.5px}
+.rtbl{width:100%;border-collapse:collapse;font-size:13px}
+.rtbl th{text-align:right;font-size:11px;color:var(--mut);font-weight:700;padding:6px 4px;border-bottom:1px solid var(--line)}
+.rtbl th:first-child,.rtbl td:first-child{text-align:left}
+.rtbl td{text-align:right;padding:8px 4px;border-bottom:1px solid var(--line);white-space:nowrap}
+.rtbl tr.tot td{font-weight:800;border-bottom:0}
+.chart{display:flex;align-items:flex-end;gap:4px;height:130px;margin-top:10px}
+.chart .m{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;height:100%;justify-content:flex-end}
+.chart .bars{display:flex;gap:2px;align-items:flex-end;height:100%;width:100%;justify-content:center}
+.chart .bars i{width:42%;border-radius:3px 3px 0 0;min-height:1px}
+.chart small{font-size:9.5px;color:var(--mut)}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--mut);margin-top:8px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;background:var(--c)}
+.rkpi{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.rkpi div{background:#f7f5ef;border-radius:10px;padding:10px}
+.rkpi b{display:block;font-size:17px;margin-top:2px}
+.print-only{display:none}
+@media print{
+  body{background:#fff;padding:0}
+  nav,.fab,header .hdr-btns,#rControls,.no-print,.toast,#installBar{display:none!important}
+  .view{display:none!important}#v-rapports{display:block!important}
+  .card{break-inside:avoid;border-color:#ccc}
+  .print-only{display:block}
+  main{max-width:none}
+}
 nav button.on{color:var(--pri);background:var(--pri2)}
 .sheet-bg{position:fixed;inset:0;background:rgba(20,24,22,.45);display:none;z-index:10;align-items:flex-end;justify-content:center}
 .sheet-bg.on{display:flex}
@@ -136,6 +161,18 @@ nav button{position:relative}nav button[data-badge]:not([data-badge=""])::after{
   </section>
 
   <!-- VEHICULES -->
+  <section class="view" id="v-rapports">
+    <div class="card" id="rControls">
+      <div class="grid2">
+        <div><label style="margin-top:0">Période</label><select id="rPer"><option value="mois">Mois</option><option value="annee">Année</option><option value="tout">Depuis le début</option><option value="perso">Personnalisée</option></select></div>
+        <div><label style="margin-top:0">Véhicule</label><select id="rVeh"></select></div>
+      </div>
+      <div class="grid2" id="rDates" style="display:none"><div><label>Du</label><input type="date" id="rFrom"></div><div><label>Au</label><input type="date" id="rTo"></div></div>
+      <div class="actions"><button class="btn ghost" id="rShare">📤 Partager</button><button class="btn" id="rPrint">🖨 PDF / Imprimer</button></div>
+    </div>
+    <div id="report"></div>
+  </section>
+
   <section class="view" id="v-vehicules">
     <div id="listVeh"></div>
     <div class="card mut" style="font-size:13px;line-height:1.5">
@@ -151,6 +188,7 @@ nav button{position:relative}nav button[data-badge]:not([data-badge=""])::after{
   <button class="on" data-v="bilan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>Bilan</button>
   <button data-v="entrees"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>Entrées</button>
   <button data-v="depenses"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>Dépenses</button>
+  <button data-v="rapports"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>Rapports</button>
   <button data-v="vehicules"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 13l2-6h14l2 6v5h-3M3 13v5h3M3 13h18"/><circle cx="7.5" cy="17.5" r="1.8"/><circle cx="16.5" cy="17.5" r="1.8"/></svg>Véhicules</button>
 </nav>
 

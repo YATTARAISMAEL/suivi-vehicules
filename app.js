@@ -23,7 +23,8 @@ const days = (a,b) => (a&&b) ? Math.max(1, Math.round((new Date(b)-new Date(a))/
 function toast(m){ const t=$("toast"); t.textContent=m; t.classList.add("on"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("on"),2600); }
 
 /* ---------- Month ---------- */
-function shiftMonth(d){ let [y,m]=month.split("-").map(Number); m+=d; if(m<1){m=12;y--} if(m>12){m=1;y++} month=y+"-"+String(m).padStart(2,"0"); render(); }
+function shiftMonth(d){ if(view==="rapports" && $("rPer").value==="annee") d*=12; shiftMonth0(d); }
+function shiftMonth0(d){ let [y,m]=month.split("-").map(Number); m+=d; if(m<1){m=12;y--} if(m>12){m=1;y++} month=y+"-"+String(m).padStart(2,"0"); render(); }
 $("mPrev").onclick=()=>shiftMonth(-1); $("mNext").onclick=()=>shiftMonth(1);
 const inMonth = d => (d||"").slice(0,7) === month;
 
@@ -38,7 +39,7 @@ $("fab").onclick=()=>{
   if(!canWrite) return toast("Lecture seule");
   if(view==="vehicules") formVeh();
   else if(view==="depenses") formOut();
-  else if(view==="entrees") formIn();
+  else if(view==="entrees" || view==="rapports") formIn();
   else chooseAdd();
 };
 
@@ -93,7 +94,9 @@ async function notifyAlerts(force){
 }
 
 function render(){
-  $("mLabel").textContent = new Date(month+"-01T00:00:00").toLocaleDateString("fr-FR",{month:"long",year:"numeric"});
+  const per=$("rPer").value;
+  $("mLabel").textContent = (view==="rapports" && per==="annee") ? "Année "+month.slice(0,4) : new Date(month+"-01T00:00:00").toLocaleDateString("fr-FR",{month:"long",year:"numeric"});
+  document.querySelector(".month").style.visibility = (view==="rapports" && (per==="tout"||per==="perso")) ? "hidden" : "";
   $("fab").style.display = canWrite ? "" : "none";
   const ins = S.entrees.filter(e=>inMonth(e.debut)), outs = S.depenses.filter(d=>inMonth(d.date));
   const tIn = ins.reduce((s,e)=>s+(+e.montant||0),0), tOut = outs.reduce((s,d)=>s+(+d.montant||0),0);
@@ -143,6 +146,8 @@ function render(){
   $("listOut").innerHTML = lo.length ? `<div class="row sp" style="margin-bottom:6px"><span class="mut">${lo.length} dépense(s)</span><b class="out">${fcfa(lo.reduce((s,d)=>s+(+d.montant||0),0))}</b></div>` + lo.map(d=>`<div class="item tap" data-out="${esc(d.id)}"><div class="grow"><b>${esc(vName(d.vehicule))}</b> <span class="tag">${esc(d.categorie||"Autre")}</span><div class="mut">${fdate(d.date)}${d.note?" · "+esc(d.note):""}</div></div><span class="amt out">−${fcfa(d.montant)}</span></div>`).join("") : `<div class="empty">Aucune dépense ce mois.<br>Touche <b>+</b> pour en ajouter une.</div>`;
   document.querySelectorAll("[data-out]").forEach(el=>el.onclick=()=>formOut(S.depenses.find(x=>x.id===el.dataset.out)));
 
+  if(view==="rapports") renderReport();
+
   // Véhicules
   $("listVeh").innerHTML = S.vehicules.length ? S.vehicules.slice().sort((a,b)=>(a.nom||"").localeCompare(b.nom||"")).map(v=>{
     const tags=[["assurance","Assur."],["visite","Visite"],["vignette","Vignette"]].filter(([k])=>v[k]).map(([k,l])=>{const d=Math.round((new Date(v[k])-new Date(today()))/864e5);return `<span class="tag ${d<0?"r":d<=30?"w":""}">${l} ${fdate(v[k])}</span>`}).join(" ");
@@ -152,6 +157,104 @@ function render(){
   document.querySelectorAll("[data-v-ed]").forEach(el=>el.onclick=()=>formVeh(S.vehicules.find(x=>x.id===el.dataset.vEd)));
 }
 $("fVehIn").onchange=render; $("fVehOut").onchange=render;
+
+/* ---------- Rapports ---------- */
+const MOIS=["janv.","févr.","mars","avr.","mai","juin","juil.","août","sept.","oct.","nov.","déc."];
+function addDays(d,n){ const x=new Date(d+"T00:00:00"); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); }
+function overlapDays(a,b,from,to){ // jours d'une location compris dans la période
+  if(!a||!b) return 0; const s=a>from?a:from, e=b<to?b:to; return e<s?0:days(s,e);
+}
+function reportRange(){
+  const per=$("rPer").value, y=+month.slice(0,4);
+  if(per==="mois"){ const [yy,mm]=month.split("-").map(Number); const last=new Date(yy,mm,0).getDate(); return {from:month+"-01", to:month+"-"+String(last).padStart(2,"0"), label:new Date(month+"-01T00:00:00").toLocaleDateString("fr-FR",{month:"long",year:"numeric"})}; }
+  if(per==="annee") return {from:y+"-01-01", to:y+"-12-31", label:"Année "+y};
+  if(per==="perso"){ const f=$("rFrom").value||month+"-01", t=$("rTo").value||today(); return {from:f,to:t,label:`du ${fdate(f)} ${f.slice(0,4)} au ${fdate(t)} ${t.slice(0,4)}`}; }
+  const all=[...S.entrees.map(e=>e.debut),...S.depenses.map(d=>d.date),...S.vehicules.map(v=>v.dateAchat)].filter(Boolean).sort();
+  return {from:all[0]||today(), to:today(), label:"Depuis le début"};
+}
+function buildReport(){
+  const R=reportRange(), vf=$("rVeh").value;
+  const vehs=S.vehicules.filter(v=>!vf||v.id===vf);
+  const inR=d=>d&&d>=R.from&&d<=R.to;
+  const ins=S.entrees.filter(e=>inR(e.debut)&&(!vf||e.vehicule===vf));
+  const outs=S.depenses.filter(d=>inR(d.date)&&(!vf||d.vehicule===vf));
+  const sum=(a,f)=>a.reduce((s,x)=>s+(+f(x)||0),0);
+  const tIn=sum(ins,e=>e.montant), tOut=sum(outs,d=>d.montant), net=tIn-tOut;
+  const jours=sum(ins,e=>days(e.debut,e.fin)), remises=sum(ins,e=>e.remise);
+  const impayes=ins.filter(e=>e.paye===false), tImp=sum(impayes,e=>e.montant);
+  const periodeJ=Math.max(1,days(R.from,R.to));
+  const occJ=sum(S.entrees.filter(e=>!vf||e.vehicule===vf),e=>overlapDays(e.debut,e.fin,R.from,R.to));
+  const occ=vehs.length? Math.min(100,occJ/(periodeJ*vehs.length)*100):0;
+  const perVeh=vehs.map(v=>{ const i=ins.filter(e=>e.vehicule===v.id), o=outs.filter(d=>d.vehicule===v.id);
+    const vi=sum(i,e=>e.montant), vo=sum(o,d=>d.montant), vj=sum(i,e=>days(e.debut,e.fin));
+    const vocc=Math.min(100,sum(S.entrees.filter(e=>e.vehicule===v.id),e=>overlapDays(e.debut,e.fin,R.from,R.to))/periodeJ*100);
+    return {v,vi,vo,net:vi-vo,vj,vocc,n:i.length}; }).sort((a,b)=>b.net-a.net);
+  const cats={}; outs.forEach(d=>cats[d.categorie||"Autre"]=(cats[d.categorie||"Autre"]||0)+(+d.montant||0));
+  // évolution : 12 derniers mois (ou les 12 mois de l'année)
+  const endM = $("rPer").value==="annee" ? month.slice(0,4)+"-12" : (R.to.slice(0,7));
+  const months=[]; { let [y,m]=endM.split("-").map(Number); for(let k=0;k<12;k++){ months.unshift(y+"-"+String(m).padStart(2,"0")); m--; if(m<1){m=12;y--;} } }
+  const evo=months.map(mm=>({mm, i:sum(S.entrees.filter(e=>(e.debut||"").startsWith(mm)&&(!vf||e.vehicule===vf)),e=>e.montant), o:sum(S.depenses.filter(d=>(d.date||"").startsWith(mm)&&(!vf||d.vehicule===vf)),d=>d.montant)}));
+  return {R,vf,vehs,ins,outs,tIn,tOut,net,jours,remises,impayes,tImp,occ,perVeh,cats,evo};
+}
+function renderReport(){
+  const vf=$("rVeh").value; $("rVeh").innerHTML=vehOptions(vf,true); $("rVeh").value=vf;
+  $("rDates").style.display = $("rPer").value==="perso" ? "grid" : "none";
+  if(!S.vehicules.length){ $("report").innerHTML=`<div class="card empty">Ajoute d'abord tes véhicules et tes opérations.</div>`; return; }
+  const r=buildReport(), pct=r.tIn?Math.round(r.net/r.tIn*100):0;
+  const max=Math.max(1,...r.evo.map(e=>Math.max(e.i,e.o)));
+  const vname = r.vf ? vName(r.vf) : "Tous les véhicules";
+  $("report").innerHTML = `
+  <div class="card">
+    <div class="print-only" style="font-size:20px;font-weight:800;margin-bottom:4px">Rapport – Suivi Véhicules</div>
+    <div class="row sp"><b style="font-size:16px;text-transform:capitalize">${esc(r.R.label)}</b><span class="mut">${esc(vname)}</span></div>
+    <div class="rkpi" style="margin-top:10px">
+      <div><span class="mut">Entrées</span><b class="in">${fcfa(r.tIn)}</b></div>
+      <div><span class="mut">Dépenses</span><b class="out">${fcfa(r.tOut)}</b></div>
+      <div style="grid-column:1/-1;background:var(--pri);color:#fff"><span style="color:#cfe3d9">Résultat net</span><b style="font-size:22px">${fcfa(r.net)}</b><span style="color:#cfe3d9;font-size:12px">Marge : ${pct} % des entrées</span></div>
+      <div><span class="mut">Sorties</span><b>${r.ins.length}</b></div>
+      <div><span class="mut">Jours loués</span><b>${r.jours}</b></div>
+      <div><span class="mut">Taux d'occupation</span><b>${Math.round(r.occ)} %</b></div>
+      <div><span class="mut">Remises accordées</span><b>${fcfa(r.remises)}</b></div>
+      ${r.tImp?`<div style="grid-column:1/-1;background:var(--warnbg)"><span class="mut">Impayés à encaisser</span><b class="out">${fcfa(r.tImp)}</b></div>`:""}
+    </div>
+  </div>
+  ${r.vf?"":`<div class="card"><b>Par véhicule</b><div style="overflow-x:auto"><table class="rtbl" style="margin-top:6px"><tr><th>Véhicule</th><th>Entrées</th><th>Dépenses</th><th>Net</th><th>Jours</th><th>Occ.</th></tr>
+    ${r.perVeh.map(p=>`<tr><td>${esc(p.v.nom)}</td><td class="in">${fcfa(p.vi)}</td><td class="out">${fcfa(p.vo)}</td><td class="${p.net>=0?"in":"out"}"><b>${fcfa(p.net)}</b></td><td>${p.vj}</td><td>${Math.round(p.vocc)} %</td></tr>`).join("")}
+    <tr class="tot"><td>Total</td><td class="in">${fcfa(r.tIn)}</td><td class="out">${fcfa(r.tOut)}</td><td>${fcfa(r.net)}</td><td>${r.jours}</td><td>${Math.round(r.occ)} %</td></tr></table></div>
+    ${r.perVeh.length>1?`<div class="mut" style="margin-top:8px">🏆 Plus rentable : <b>${esc(r.perVeh[0].v.nom)}</b> · ⚠ Moins rentable : <b>${esc(r.perVeh[r.perVeh.length-1].v.nom)}</b></div>`:""}</div>`}
+  <div class="card"><b>Évolution sur 12 mois</b>
+    <div class="chart">${r.evo.map(e=>`<div class="m"><div class="bars"><i style="height:${e.i/max*100}%;background:var(--in)"></i><i style="height:${e.o/max*100}%;background:var(--out)"></i></div><small>${MOIS[+e.mm.slice(5)-1]}</small></div>`).join("")}</div>
+    <div class="legend"><span style="--c:var(--in)">Entrées</span><span style="--c:var(--out)">Dépenses</span></div>
+    <table class="rtbl" style="margin-top:10px"><tr><th>Mois</th><th>Entrées</th><th>Dépenses</th><th>Net</th></tr>
+    ${r.evo.filter(e=>e.i||e.o).map(e=>`<tr><td>${MOIS[+e.mm.slice(5)-1]} ${e.mm.slice(0,4)}</td><td class="in">${fcfa(e.i)}</td><td class="out">${fcfa(e.o)}</td><td class="${e.i-e.o>=0?"in":"out"}">${fcfa(e.i-e.o)}</td></tr>`).join("")||`<tr><td colspan="4" class="mut" style="text-align:center">Aucune opération</td></tr>`}</table>
+  </div>
+  <div class="card"><b>Dépenses par catégorie</b>
+    ${Object.keys(r.cats).length? Object.entries(r.cats).sort((a,b)=>b[1]-a[1]).map(([c,m])=>`<div class="item"><span class="grow">${esc(c)}<div class="bar" style="margin-top:4px"><i style="width:${m/r.tOut*100}%;background:var(--out)"></i></div></span><span class="amt out">${fcfa(m)} <span class="mut">${Math.round(m/r.tOut*100)} %</span></span></div>`).join("") : `<div class="mut" style="margin-top:6px">Aucune dépense sur la période</div>`}
+  </div>
+  ${r.impayes.length?`<div class="card alert"><b>Impayés</b>${r.impayes.map(e=>`<div class="item"><span class="grow">${esc(vName(e.vehicule))}${e.client?" · "+esc(e.client):""}<div class="mut">Du ${fdate(e.debut)} au ${fdate(e.fin)}</div></span><span class="amt out">${fcfa(e.montant)}</span></div>`).join("")}</div>`:""}
+  <details class="card"><summary style="font-weight:800;cursor:pointer">Détail des opérations (${r.ins.length+r.outs.length})</summary>
+    <table class="rtbl" style="margin-top:8px"><tr><th>Date</th><th>Véhicule</th><th>Libellé</th><th>Montant</th></tr>
+    ${[...r.ins.map(e=>({d:e.debut,v:e.vehicule,l:`Location ${days(e.debut,e.fin)} j${e.client?" – "+e.client:""}`,m:+e.montant||0})),...r.outs.map(d=>({d:d.date,v:d.vehicule,l:d.categorie+(d.note?" – "+d.note:""),m:-(+d.montant||0)}))].sort((a,b)=>(a.d||"").localeCompare(b.d||"")).map(o=>`<tr><td>${fdate(o.d)}</td><td>${esc(vName(o.v))}</td><td style="white-space:normal;text-align:left">${esc(o.l)}</td><td class="${o.m>=0?"in":"out"}">${o.m>=0?"+":"−"}${fcfa(Math.abs(o.m))}</td></tr>`).join("")}</table>
+  </details>
+  <div class="print-only mut">Édité le ${new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"})}</div>`;
+}
+function reportText(){
+  const r=buildReport();
+  let t=`📊 *Rapport véhicules – ${r.R.label}*\n${r.vf?vName(r.vf):"Tous les véhicules"}\n\n`;
+  t+=`✅ Entrées : ${fcfa(r.tIn)}\n❌ Dépenses : ${fcfa(r.tOut)}\n💰 *Résultat net : ${fcfa(r.net)}*\n`;
+  t+=`🚗 ${r.ins.length} sortie(s) · ${r.jours} jour(s) loué(s) · occupation ${Math.round(r.occ)} %\n`;
+  if(r.remises) t+=`🏷 Remises : ${fcfa(r.remises)}\n`;
+  if(r.tImp) t+=`⏳ Impayés : ${fcfa(r.tImp)}\n`;
+  if(!r.vf && r.perVeh.length){ t+=`\n*Par véhicule :*\n`+r.perVeh.map(p=>`• ${p.v.nom} : ${fcfa(p.net)} (${p.vj} j)`).join("\n")+"\n"; }
+  return t;
+}
+$("rPer").onchange=render; $("rVeh").onchange=render; $("rFrom").onchange=render; $("rTo").onchange=render;
+$("rPrint").onclick=()=>{ document.querySelectorAll("#report details").forEach(d=>d.open=true); setTimeout(()=>window.print(),100); };
+$("rShare").onclick=async()=>{
+  const txt=reportText();
+  try{ if(navigator.share){ await navigator.share({text:txt}); return; } }catch(e){ if(e&&e.name==="AbortError") return; }
+  window.open("https://wa.me/?text="+encodeURIComponent(txt),"_blank");
+};
 
 /* ---------- Amortissement ---------- */
 function amort(v){
