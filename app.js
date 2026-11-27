@@ -8,7 +8,7 @@ const auth = getAuth(fbApp);
 const fs = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 
 const CATS = ["Carburant","Entretien / vidange","Réparation","Pneus","Assurance","Visite technique","Chauffeur","Lavage","Amende / taxe","Autre"];
-const S = { vehicules:[], entrees:[], depenses:[] };
+const S = { vehicules:[], entrees:[], depenses:[], batModeles:[], batAchats:[], batVentes:[], batFrais:[] };
 let canWrite = true, view = "bilan";
 const now = new Date();
 let month = now.getFullYear() + "-" + String(now.getMonth()+1).padStart(2,"0");
@@ -40,6 +40,7 @@ $("fab").onclick=()=>{
   if(view==="vehicules") formVeh();
   else if(view==="depenses") formOut();
   else if(view==="entrees" || view==="rapports") formIn();
+  else if(view==="batteries") chooseBat();
   else chooseAdd();
 };
 
@@ -147,6 +148,7 @@ function render(){
   document.querySelectorAll("[data-out]").forEach(el=>el.onclick=()=>formOut(S.depenses.find(x=>x.id===el.dataset.out)));
 
   if(view==="rapports") renderReport();
+  if(view==="batteries") renderBat();
 
   // Véhicules
   $("listVeh").innerHTML = S.vehicules.length ? S.vehicules.slice().sort((a,b)=>(a.nom||"").localeCompare(b.nom||"")).map(v=>{
@@ -236,6 +238,7 @@ function renderReport(){
     <table class="rtbl" style="margin-top:8px"><tr><th>Date</th><th>Véhicule</th><th>Libellé</th><th>Montant</th></tr>
     ${[...r.ins.map(e=>({d:e.debut,v:e.vehicule,l:`Location ${days(e.debut,e.fin)} j${e.client?" – "+e.client:""}`,m:+e.montant||0})),...r.outs.map(d=>({d:d.date,v:d.vehicule,l:d.categorie+(d.note?" – "+d.note:""),m:-(+d.montant||0)}))].sort((a,b)=>(a.d||"").localeCompare(b.d||"")).map(o=>`<tr><td>${fdate(o.d)}</td><td>${esc(vName(o.v))}</td><td style="white-space:normal;text-align:left">${esc(o.l)}</td><td class="${o.m>=0?"in":"out"}">${o.m>=0?"+":"−"}${fcfa(Math.abs(o.m))}</td></tr>`).join("")}</table>
   </details>
+  ${batReportCard(r.R)}
   <div class="print-only mut">Édité le ${new Date().toLocaleDateString("fr-FR",{day:"numeric",month:"long",year:"numeric"})}</div>`;
 }
 function reportText(){
@@ -246,6 +249,8 @@ function reportText(){
   if(r.remises) t+=`🏷 Remises : ${fcfa(r.remises)}\n`;
   if(r.tImp) t+=`⏳ Impayés : ${fcfa(r.tImp)}\n`;
   if(!r.vf && r.perVeh.length){ t+=`\n*Par véhicule :*\n`+r.perVeh.map(p=>`• ${p.v.nom} : ${fcfa(p.net)} (${p.vj} j)`).join("\n")+"\n"; }
+  const bb=batStats(r.R.from,r.R.to);
+  if(bb.ventes.length||bb.frais.length) t+=`\n🔋 *Batteries* : ${bb.qte} vendue(s) · ventes ${fcfa(bb.ca)} · marge nette *${fcfa(bb.nette)}*\n`;
   return t;
 }
 $("rPer").onchange=render; $("rVeh").onchange=render; $("rFrom").onchange=render; $("rTo").onchange=render;
@@ -255,6 +260,138 @@ $("rShare").onclick=async()=>{
   try{ if(navigator.share){ await navigator.share({text:txt}); return; } }catch(e){ if(e&&e.name==="AbortError") return; }
   window.open("https://wa.me/?text="+encodeURIComponent(txt),"_blank");
 };
+
+/* ---------- Batteries ---------- */
+const BAT_CATS=["Transport","Loyer / boutique","Électricité","Main d'œuvre","Taxe","Autre"];
+const mName=id=>(S.batModeles.find(m=>m.id===id)||{}).nom||"Modèle supprimé";
+const uCost=a=>((+a.quantite||0)*(+a.prixUnitaire||0)+(+a.frais||0)); // coût total d'un achat
+function batCMP(id){ // coût moyen pondéré d'une batterie (achat + frais d'achat)
+  const ach=S.batAchats.filter(a=>a.modele===id), q=ach.reduce((s,a)=>s+(+a.quantite||0),0);
+  if(q) return ach.reduce((s,a)=>s+uCost(a),0)/q;
+  return +((S.batModeles.find(m=>m.id===id)||{}).prixAchat)||0;
+}
+function batStock(id){ return S.batAchats.filter(a=>a.modele===id).reduce((s,a)=>s+(+a.quantite||0),0) - S.batVentes.filter(v=>v.modele===id).reduce((s,v)=>s+(+v.quantite||0),0); }
+const venteCA=v=>Math.max(0,(+v.quantite||0)*(+v.prixUnitaire||0)-(+v.remise||0));
+const venteCout=v=>(+v.quantite||0)*(v.coutUnitaire!=null?+v.coutUnitaire:batCMP(v.modele));
+function batStats(from,to){
+  const inR=d=>d&&d>=from&&d<=to;
+  const ventes=S.batVentes.filter(v=>inR(v.date)), frais=S.batFrais.filter(f=>inR(f.date)), achats=S.batAchats.filter(a=>inR(a.date));
+  const ca=ventes.reduce((s,v)=>s+venteCA(v),0), cout=ventes.reduce((s,v)=>s+venteCout(v),0), tf=frais.reduce((s,f)=>s+(+f.montant||0),0);
+  const qte=ventes.reduce((s,v)=>s+(+v.quantite||0),0), remises=ventes.reduce((s,v)=>s+(+v.remise||0),0);
+  const impayes=ventes.filter(v=>v.paye===false).reduce((s,v)=>s+venteCA(v),0);
+  const perM=S.batModeles.map(m=>{ const vs=ventes.filter(v=>v.modele===m.id); const c=vs.reduce((s,v)=>s+venteCA(v),0), k=vs.reduce((s,v)=>s+venteCout(v),0); return {m, q:vs.reduce((s,v)=>s+(+v.quantite||0),0), ca:c, marge:c-k}; }).filter(x=>x.q).sort((a,b)=>b.marge-a.marge);
+  return {ventes,frais,achats,ca,cout,tf,qte,remises,impayes,brute:ca-cout,nette:ca-cout-tf,perM, achatsTot:achats.reduce((s,a)=>s+uCost(a),0)};
+}
+function monthRange(){ const [y,m]=month.split("-").map(Number); return [month+"-01", month+"-"+String(new Date(y,m,0).getDate()).padStart(2,"0")]; }
+function renderBat(){
+  const [from,to]=monthRange(), b=batStats(from,to), pct=b.ca?Math.round(b.nette/b.ca*100):0;
+  const stockVal=S.batModeles.reduce((s,m)=>s+Math.max(0,batStock(m.id))*batCMP(m.id),0);
+  $("batBody").innerHTML = !S.batModeles.length ? `<div class="card empty">Commence par ajouter tes <b>modèles de batteries</b> (ex : 70Ah Varta).<br><br><button class="btn" id="bFirst" style="width:auto">+ Ajouter un modèle</button></div>` : `
+  <div class="kpis">
+    <div class="card"><div class="mut">Ventes du mois</div><div class="big in">${fcfa(b.ca)}</div><div class="mut">${b.qte} batterie${b.qte>1?"s":""}</div></div>
+    <div class="card"><div class="mut">Coût des batteries vendues</div><div class="big out">${fcfa(b.cout)}</div></div>
+    <div class="card"><div class="mut">Marge brute</div><div class="big">${fcfa(b.brute)}</div></div>
+    <div class="card"><div class="mut">Frais du mois</div><div class="big out">${fcfa(b.tf)}</div></div>
+    <div class="card wide"><div class="mut">Marge nette du mois</div><div class="big">${fcfa(b.nette)}</div><div class="mut">${pct} % du chiffre d'affaires${b.remises?` · remises ${fcfa(b.remises)}`:""}${b.impayes?` · impayés ${fcfa(b.impayes)}`:""}</div></div>
+  </div>
+  <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+    <button class="btn" id="bV">+ Vente</button><button class="btn ghost" id="bA">+ Achat / stock</button>
+    <button class="btn ghost" id="bF">+ Frais</button><button class="btn ghost" id="bM">+ Modèle</button>
+  </div>
+  <h2>Stock</h2>
+  <div class="card">${S.batModeles.slice().sort((a,c)=>(a.nom||"").localeCompare(c.nom||"")).map(m=>{ const st=batStock(m.id), cmp=batCMP(m.id), pv=+m.prixVente||0;
+    return `<div class="item tap" data-bm="${esc(m.id)}"><div class="grow"><b>${esc(m.nom)}</b><div class="mut">Coût ${fcfa(cmp)}${pv?` · vente ${fcfa(pv)} · marge ${fcfa(pv-cmp)}/u`:""}</div></div><span class="tag ${st<=0?"r":st<=(+m.alerte||2)?"w":""}">${st} en stock</span></div>`; }).join("")}
+    <div class="row sp" style="margin-top:8px"><span class="mut">Valeur du stock</span><b>${fcfa(stockVal)}</b></div></div>
+  ${b.perM.length?`<h2>Marge par modèle (mois)</h2><div class="card">${b.perM.map(x=>`<div class="item"><span class="grow"><b>${esc(x.m.nom)}</b><div class="mut">${x.q} vendue${x.q>1?"s":""} · ${fcfa(x.ca)}</div></span><span class="amt ${x.marge>=0?"in":"out"}">${fcfa(x.marge)}</span></div>`).join("")}</div>`:""}
+  <h2>Ventes du mois</h2>
+  <div class="card">${b.ventes.length? b.ventes.slice().sort((a,c)=>(c.date||"").localeCompare(a.date||"")).map(v=>`<div class="item tap" data-bv="${esc(v.id)}"><div class="grow"><b>${esc(mName(v.modele))}</b> × ${+v.quantite||0}${v.client?` <span class="mut">· ${esc(v.client)}</span>`:""}<div class="mut">${fdate(v.date)} · ${fcfa(v.prixUnitaire)}/u${v.remise?` · remise ${fcfa(v.remise)}`:""} · marge ${fcfa(venteCA(v)-venteCout(v))}${v.paye===false?' · <span class="tag w">Non payé</span>':""}</div></div><span class="amt in">+${fcfa(venteCA(v))}</span></div>`).join("") : `<div class="empty">Aucune vente ce mois</div>`}</div>
+  <h2>Achats & frais du mois</h2>
+  <div class="card">${(b.achats.length||b.frais.length)? [...b.achats.map(a=>({d:a.date,h:`<div class="item tap" data-ba="${esc(a.id)}"><div class="grow"><b>Achat ${esc(mName(a.modele))}</b> × ${+a.quantite||0}<div class="mut">${fdate(a.date)} · ${fcfa(a.prixUnitaire)}/u${a.frais?` + frais ${fcfa(a.frais)}`:""}${a.fournisseur?" · "+esc(a.fournisseur):""}</div></div><span class="amt">${fcfa(uCost(a))}</span></div>`})), ...b.frais.map(f=>({d:f.date,h:`<div class="item tap" data-bf="${esc(f.id)}"><div class="grow"><b>${esc(f.categorie||"Frais")}</b><div class="mut">${fdate(f.date)}${f.note?" · "+esc(f.note):""}</div></div><span class="amt out">−${fcfa(f.montant)}</span></div>`}))].sort((a,c)=>(c.d||"").localeCompare(a.d||"")).map(x=>x.h).join("") : `<div class="empty">Aucun achat ni frais ce mois</div>`}</div>
+  <div class="mut" style="font-size:12px;margin:4px 2px 12px">Marge nette = ventes (après remises) − coût d'achat des batteries vendues (prix + frais d'achat, en coût moyen) − frais du mois. Les achats de stock ne sont pas des pertes : ils deviennent un coût seulement quand la batterie est vendue.</div>`;
+  const on=(id,f)=>{ if($(id)) $(id).onclick=f; };
+  on("bFirst",()=>formBatModele()); on("bV",()=>formBatVente()); on("bA",()=>formBatAchat()); on("bF",()=>formBatFrais()); on("bM",()=>formBatModele());
+  document.querySelectorAll("[data-bm]").forEach(el=>el.onclick=()=>formBatModele(S.batModeles.find(x=>x.id===el.dataset.bm)));
+  document.querySelectorAll("[data-bv]").forEach(el=>el.onclick=()=>formBatVente(S.batVentes.find(x=>x.id===el.dataset.bv)));
+  document.querySelectorAll("[data-ba]").forEach(el=>el.onclick=()=>formBatAchat(S.batAchats.find(x=>x.id===el.dataset.ba)));
+  document.querySelectorAll("[data-bf]").forEach(el=>el.onclick=()=>formBatFrais(S.batFrais.find(x=>x.id===el.dataset.bf)));
+}
+function modeleOptions(sel){ return S.batModeles.map(m=>`<option value="${esc(m.id)}" ${m.id===sel?"selected":""}>${esc(m.nom)} (stock ${batStock(m.id)})</option>`).join(""); }
+function needModele(){ if(!S.batModeles.length){ toast("Ajoute d'abord un modèle de batterie"); formBatModele(); return true; } return false; }
+function chooseBat(){
+  if(!canWrite) return toast("Lecture seule");
+  openSheet(`<h3>Batteries</h3><div style="display:grid;gap:10px;margin-top:12px"><button class="btn" id="x1">+ Une vente</button><button class="btn ghost" id="x2">+ Un achat / réapprovisionnement</button><button class="btn ghost" id="x3">+ Des frais</button><button class="btn ghost" id="x4">+ Un modèle de batterie</button></div>`);
+  $("x1").onclick=()=>formBatVente(); $("x2").onclick=()=>formBatAchat(); $("x3").onclick=()=>formBatFrais(); $("x4").onclick=()=>formBatModele();
+}
+function formBatModele(m){
+  m=m||{};
+  openSheet(`<form id="f"><h3>${m.id?"Modifier le modèle":"Nouveau modèle de batterie"}</h3>
+  <label>Nom / modèle</label><input name="nom" required value="${esc(m.nom||"")}" placeholder="ex : Varta 70Ah">
+  <div class="grid2"><div><label>Prix d'achat habituel</label><input type="number" inputmode="numeric" name="prixAchat" min="0" value="${esc(m.prixAchat??"")}" placeholder="ex : 45000"></div><div><label>Prix de vente habituel</label><input type="number" inputmode="numeric" name="prixVente" min="0" value="${esc(m.prixVente??"")}" placeholder="ex : 60000"></div></div>
+  <label>Alerte stock bas à partir de</label><input type="number" inputmode="numeric" name="alerte" min="0" value="${esc(m.alerte??2)}">
+  ${m.id?`<div class="mut" style="margin-top:10px">Stock actuel : <b>${batStock(m.id)}</b> · coût moyen réel : <b>${fcfa(batCMP(m.id))}</b></div>`:""}
+  ${footer(!!m.id)}</form>`);
+  bindForm("batModeles", m, fd=>({ nom:fd.nom.trim(), prixAchat:fd.prixAchat?+fd.prixAchat:null, prixVente:fd.prixVente?+fd.prixVente:null, alerte:fd.alerte?+fd.alerte:0 }),
+    m.id?()=>{ const n=S.batVentes.filter(v=>v.modele===m.id).length+S.batAchats.filter(a=>a.modele===m.id).length; return n?`Ce modèle a ${n} opération(s). Elles resteront mais afficheront « Modèle supprimé ».`:""; }:null);
+}
+function formBatAchat(a){
+  if(needModele()) return; a=a||{};
+  const def=S.batModeles[0];
+  openSheet(`<form id="f"><h3>${a.id?"Modifier l'achat":"Achat de batteries"}</h3><div class="mut">Réapprovisionnement du stock</div>
+  <label>Modèle</label><select name="modele" required>${modeleOptions(a.modele||def.id)}</select>
+  <div class="grid2"><div><label>Date</label><input type="date" name="date" required value="${esc(a.date||today())}"></div><div><label>Quantité</label><input type="number" inputmode="numeric" name="quantite" required min="1" value="${esc(a.quantite??"")}"></div></div>
+  <div class="grid2"><div><label>Prix d'achat unitaire</label><input type="number" inputmode="numeric" name="prixUnitaire" required min="0" value="${esc(a.prixUnitaire??(def.prixAchat??""))}"></div><div><label>Frais d'achat (transport…)</label><input type="number" inputmode="numeric" name="frais" min="0" value="${esc(a.frais??"")}" placeholder="0"></div></div>
+  <div class="mut" id="calcLine" style="margin-top:8px"></div>
+  <label>Fournisseur</label><input name="fournisseur" value="${esc(a.fournisseur||"")}" placeholder="facultatif">
+  ${footer(!!a.id)}</form>`);
+  const F=$("f"), q=n=>F.elements[n];
+  const calc=()=>{ const Q=+q("quantite").value||0, P=+q("prixUnitaire").value||0, Fr=+q("frais").value||0; $("calcLine").innerHTML = Q? `Total ${fcfa(Q*P+Fr)} · coût réel par batterie <b>${fcfa((Q*P+Fr)/Q)}</b>` : ""; };
+  q("modele").onchange=()=>{ const m=S.batModeles.find(x=>x.id===q("modele").value); if(m&&m.prixAchat&&!a.id) q("prixUnitaire").value=m.prixAchat; calc(); };
+  ["quantite","prixUnitaire","frais"].forEach(n=>q(n).oninput=calc); calc();
+  bindForm("batAchats", a, fd=>({ modele:fd.modele, date:fd.date, quantite:+fd.quantite||0, prixUnitaire:+fd.prixUnitaire||0, frais:+fd.frais||0, fournisseur:fd.fournisseur.trim() }));
+}
+function formBatVente(v){
+  if(needModele()) return; v=v||{};
+  const def=S.batModeles[0];
+  openSheet(`<form id="f"><h3>${v.id?"Modifier la vente":"Vente de batteries"}</h3>
+  <label>Modèle</label><select name="modele" required>${modeleOptions(v.modele||def.id)}</select>
+  <div class="grid2"><div><label>Date</label><input type="date" name="date" required value="${esc(v.date||today())}"></div><div><label>Quantité</label><input type="number" inputmode="numeric" name="quantite" required min="1" value="${esc(v.quantite??1)}"></div></div>
+  <div class="grid2"><div><label>Prix de vente unitaire</label><input type="number" inputmode="numeric" name="prixUnitaire" required min="0" value="${esc(v.prixUnitaire??(def.prixVente??""))}"></div><div><label>Remise (FCFA)</label><input type="number" inputmode="numeric" name="remise" min="0" value="${esc(v.remise??"")}" placeholder="0"></div></div>
+  <div class="mut" id="calcLine" style="margin-top:8px"></div>
+  <label>Client</label><input name="client" value="${esc(v.client||"")}" placeholder="facultatif">
+  <label>Payé ?</label><select name="paye"><option value="1">Oui, payé</option><option value="0" ${v.paye===false?"selected":""}>Non, à crédit</option></select>
+  ${footer(!!v.id)}</form>`);
+  const F=$("f"), q=n=>F.elements[n];
+  const calc=()=>{ const id=q("modele").value, Q=+q("quantite").value||0, P=+q("prixUnitaire").value||0, R=+q("remise").value||0;
+    const cu = v.id&&v.modele===id&&v.coutUnitaire!=null ? +v.coutUnitaire : batCMP(id), ca=Math.max(0,Q*P-R), mg=ca-Q*cu;
+    const st=batStock(id)+(v.id&&v.modele===id?(+v.quantite||0):0);
+    $("calcLine").innerHTML = Q? `Total <b>${fcfa(ca)}</b> · coût ${fcfa(Q*cu)} · marge <b class="${mg>=0?"in":"out"}">${fcfa(mg)}</b>${Q>st?` <span class="tag r">stock insuffisant (${st})</span>`:""}` : ""; };
+  q("modele").onchange=()=>{ const m=S.batModeles.find(x=>x.id===q("modele").value); if(m&&m.prixVente&&!v.id) q("prixUnitaire").value=m.prixVente; calc(); };
+  ["quantite","prixUnitaire","remise"].forEach(n=>q(n).oninput=calc); calc();
+  bindForm("batVentes", v, fd=>({ modele:fd.modele, date:fd.date, quantite:+fd.quantite||0, prixUnitaire:+fd.prixUnitaire||0, remise:+fd.remise||0, client:fd.client.trim(), paye:fd.paye==="1",
+    coutUnitaire: (v.id&&v.modele===fd.modele&&v.coutUnitaire!=null)? +v.coutUnitaire : Math.round(batCMP(fd.modele)) }));
+}
+function formBatFrais(f){
+  f=f||{};
+  openSheet(`<form id="f"><h3>${f.id?"Modifier les frais":"Frais batteries"}</h3><div class="mut">Frais de l'activité batteries, hors prix d'achat</div>
+  <div class="grid2"><div><label>Date</label><input type="date" name="date" required value="${esc(f.date||today())}"></div><div><label>Montant (FCFA)</label><input type="number" inputmode="numeric" name="montant" required min="0" value="${esc(f.montant??"")}"></div></div>
+  <label>Catégorie</label><select name="categorie">${BAT_CATS.map(c=>`<option ${c===(f.categorie||"Transport")?"selected":""}>${c}</option>`).join("")}</select>
+  <label>Détail</label><textarea name="note" placeholder="facultatif">${esc(f.note||"")}</textarea>
+  ${footer(!!f.id)}</form>`);
+  bindForm("batFrais", f, fd=>({ date:fd.date, montant:+fd.montant||0, categorie:fd.categorie, note:fd.note.trim() }));
+}
+function batReportCard(R){
+  if(!S.batVentes.length && !S.batFrais.length) return "";
+  const b=batStats(R.from,R.to); if(!b.ventes.length && !b.frais.length) return "";
+  return `<div class="card"><b>🔋 Batteries</b>
+    <div class="rkpi" style="margin-top:8px">
+      <div><span class="mut">Ventes</span><b class="in">${fcfa(b.ca)}</b><span class="mut" style="font-size:12px">${b.qte} batterie(s)</span></div>
+      <div><span class="mut">Coût des batteries</span><b class="out">${fcfa(b.cout)}</b></div>
+      <div><span class="mut">Frais</span><b class="out">${fcfa(b.tf)}</b></div>
+      <div style="background:var(--pri);color:#fff"><span style="color:#cfe3d9">Marge nette</span><b>${fcfa(b.nette)}</b></div>
+    </div>
+    ${b.perM.length?`<table class="rtbl" style="margin-top:10px"><tr><th>Modèle</th><th>Qté</th><th>Ventes</th><th>Marge</th></tr>${b.perM.map(x=>`<tr><td>${esc(x.m.nom)}</td><td>${x.q}</td><td>${fcfa(x.ca)}</td><td class="${x.marge>=0?"in":"out"}">${fcfa(x.marge)}</td></tr>`).join("")}</table>`:""}
+  </div>`;
+}
 
 /* ---------- Amortissement ---------- */
 function amort(v){
@@ -294,8 +431,8 @@ $("sheetBg").onclick=e=>{ if(e.target.id==="sheetBg") closeSheet(); };
 
 function chooseAdd(){
   openSheet(`<h3>Ajouter</h3><div class="mut" style="margin-bottom:14px">Que veux-tu enregistrer ?</div>
-  <div style="display:grid;gap:10px"><button class="btn" id="cIn">+ Une entrée (sortie / location)</button><button class="btn ghost" id="cOut">− Une dépense</button><button class="btn ghost" id="cVeh">Un véhicule</button></div>`);
-  $("cIn").onclick=()=>formIn(); $("cOut").onclick=()=>formOut(); $("cVeh").onclick=()=>formVeh();
+  <div style="display:grid;gap:10px"><button class="btn" id="cIn">+ Une entrée (sortie / location)</button><button class="btn ghost" id="cOut">− Une dépense</button><button class="btn ghost" id="cVeh">Un véhicule</button><button class="btn ghost" id="cBat">🔋 Une vente de batterie</button></div>`);
+  $("cIn").onclick=()=>formIn(); $("cOut").onclick=()=>formOut(); $("cVeh").onclick=()=>formVeh(); $("cBat").onclick=()=>formBatVente();
 }
 function needVeh(){ if(!S.vehicules.length){ toast("Ajoute d'abord un véhicule"); formVeh(); return true;} return false; }
 
@@ -416,7 +553,7 @@ let unsubs=[];
 function startData(){
   $("status").textContent="Chargement…";
   const ready={};
-  ["vehicules","entrees","depenses"].forEach(col=>{
+  ["vehicules","entrees","depenses","batModeles","batAchats","batVentes","batFrais"].forEach(col=>{
     unsubs.push(onSnapshot(collection(fs,col), { includeMetadataChanges:true }, snap=>{
       S[col]=snap.docs.map(d=>({id:d.id, ...d.data()}));
       ready[col]=!snap.metadata.fromCache;
@@ -430,7 +567,7 @@ function startData(){
     }));
   });
 }
-function stopData(){ unsubs.forEach(u=>u()); unsubs=[]; S.vehicules=[];S.entrees=[];S.depenses=[]; }
+function stopData(){ unsubs.forEach(u=>u()); unsubs=[]; Object.keys(S).forEach(k=>S[k]=[]); }
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="visible"){ notifiedOnce=false; notifyAlerts(); } });
 window.addEventListener("online", ()=>{ $("status").textContent="Synchronisation…"; });
 window.addEventListener("offline", ()=>{ $("status").textContent="Hors ligne — les ajouts seront envoyés plus tard"; });
