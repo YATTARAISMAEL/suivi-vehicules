@@ -7,7 +7,7 @@ const fbApp = initializeApp(window.FIREBASE_CONFIG);
 const auth = getAuth(fbApp);
 const fs = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) });
 
-const CATS = ["Carburant","Entretien / vidange","Réparation","Pneus","Assurance","Visite technique","Chauffeur","Lavage","Amende / taxe","Autre"];
+const CATS = ["Carburant","Entretien / vidange","Réparation","Pièces détachées","Pneus","Batterie","Assurance","Visite technique","Vignette / patente","Chauffeur","Péage / parking","Lavage","Amende / taxe","Autre"];
 const S = { vehicules:[], entrees:[], depenses:[], batModeles:[], batAchats:[], batVentes:[], batFrais:[] };
 let canWrite = true, view = "bilan";
 const now = new Date();
@@ -262,7 +262,14 @@ $("rShare").onclick=async()=>{
 };
 
 /* ---------- Batteries ---------- */
-const BAT_CATS=["Transport","Loyer / boutique","Électricité","Main d'œuvre","Taxe","Autre"];
+const BAT_CATS=["Carburant","Transport / livraison","Manutention / chargement","Salaire / main d'œuvre","Loyer / boutique","Électricité","Eau","Communication / crédit","Emballage","Entretien / réparation","Taxe / patente / impôt","Douane","Publicité","Frais bancaires / Mobile Money","Autre"];
+function catsOf(list){ const c={}; list.forEach(f=>{ const k=f.categorie||"Autre"; c[k]=(c[k]||0)+(+f.montant||0); }); return Object.entries(c).sort((a,b)=>b[1]-a[1]); }
+function chargesCard(frais, total, titre){
+  const cats=catsOf(frais);
+  if(!cats.length) return "";
+  return `<div class="card"><div class="row sp"><b>${titre}</b><b class="out">${fcfa(total)}</b></div>
+    ${cats.map(([c,m])=>`<div class="item"><span class="grow">${esc(c)}<div class="bar" style="margin-top:4px"><i style="width:${total?m/total*100:0}%;background:var(--out)"></i></div></span><span class="amt out">${fcfa(m)} <span class="mut">${total?Math.round(m/total*100):0} %</span></span></div>`).join("")}</div>`;
+}
 const mName=id=>(S.batModeles.find(m=>m.id===id)||{}).nom||"Modèle supprimé";
 const uCost=a=>((+a.quantite||0)*(+a.prixUnitaire||0)+(+a.frais||0)); // coût total d'un achat
 function batCMP(id){ // coût moyen pondéré d'une batterie (achat + frais d'achat)
@@ -291,23 +298,24 @@ function renderBat(){
     <div class="card"><div class="mut">Ventes du mois</div><div class="big in">${fcfa(b.ca)}</div><div class="mut">${b.qte} batterie${b.qte>1?"s":""}</div></div>
     <div class="card"><div class="mut">Coût des batteries vendues</div><div class="big out">${fcfa(b.cout)}</div></div>
     <div class="card"><div class="mut">Marge brute</div><div class="big">${fcfa(b.brute)}</div></div>
-    <div class="card"><div class="mut">Frais du mois</div><div class="big out">${fcfa(b.tf)}</div></div>
+    <div class="card"><div class="mut">Charges du mois</div><div class="big out">${fcfa(b.tf)}</div></div>
     <div class="card wide"><div class="mut">Marge nette du mois</div><div class="big">${fcfa(b.nette)}</div><div class="mut">${pct} % du chiffre d'affaires${b.remises?` · remises ${fcfa(b.remises)}`:""}${b.impayes?` · impayés ${fcfa(b.impayes)}`:""}</div></div>
   </div>
   <div class="card" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
     <button class="btn" id="bV">+ Vente</button><button class="btn ghost" id="bA">+ Achat / stock</button>
-    <button class="btn ghost" id="bF">+ Frais</button><button class="btn ghost" id="bM">+ Modèle</button>
+    <button class="btn ghost" id="bF">+ Charge</button><button class="btn ghost" id="bM">+ Modèle</button>
   </div>
   <h2>Stock</h2>
   <div class="card">${S.batModeles.slice().sort((a,c)=>(a.nom||"").localeCompare(c.nom||"")).map(m=>{ const st=batStock(m.id), cmp=batCMP(m.id), pv=+m.prixVente||0;
     return `<div class="item tap" data-bm="${esc(m.id)}"><div class="grow"><b>${esc(m.nom)}</b><div class="mut">Coût ${fcfa(cmp)}${pv?` · vente ${fcfa(pv)} · marge ${fcfa(pv-cmp)}/u`:""}</div></div><span class="tag ${st<=0?"r":st<=(+m.alerte||2)?"w":""}">${st} en stock</span></div>`; }).join("")}
     <div class="row sp" style="margin-top:8px"><span class="mut">Valeur du stock</span><b>${fcfa(stockVal)}</b></div></div>
   ${b.perM.length?`<h2>Marge par modèle (mois)</h2><div class="card">${b.perM.map(x=>`<div class="item"><span class="grow"><b>${esc(x.m.nom)}</b><div class="mut">${x.q} vendue${x.q>1?"s":""} · ${fcfa(x.ca)}</div></span><span class="amt ${x.marge>=0?"in":"out"}">${fcfa(x.marge)}</span></div>`).join("")}</div>`:""}
+  ${b.frais.length?`<h2>Détail des charges</h2>${chargesCard(b.frais,b.tf,"Charges du mois")}`:""}
   <h2>Ventes du mois</h2>
   <div class="card">${b.ventes.length? b.ventes.slice().sort((a,c)=>(c.date||"").localeCompare(a.date||"")).map(v=>`<div class="item tap" data-bv="${esc(v.id)}"><div class="grow"><b>${esc(mName(v.modele))}</b> × ${+v.quantite||0}${v.client?` <span class="mut">· ${esc(v.client)}</span>`:""}<div class="mut">${fdate(v.date)} · ${fcfa(v.prixUnitaire)}/u${v.remise?` · remise ${fcfa(v.remise)}`:""} · marge ${fcfa(venteCA(v)-venteCout(v))}${v.paye===false?' · <span class="tag w">Non payé</span>':""}</div></div><span class="amt in">+${fcfa(venteCA(v))}</span></div>`).join("") : `<div class="empty">Aucune vente ce mois</div>`}</div>
   <h2>Achats & frais du mois</h2>
   <div class="card">${(b.achats.length||b.frais.length)? [...b.achats.map(a=>({d:a.date,h:`<div class="item tap" data-ba="${esc(a.id)}"><div class="grow"><b>Achat ${esc(mName(a.modele))}</b> × ${+a.quantite||0}<div class="mut">${fdate(a.date)} · ${fcfa(a.prixUnitaire)}/u${a.frais?` + frais ${fcfa(a.frais)}`:""}${a.fournisseur?" · "+esc(a.fournisseur):""}</div></div><span class="amt">${fcfa(uCost(a))}</span></div>`})), ...b.frais.map(f=>({d:f.date,h:`<div class="item tap" data-bf="${esc(f.id)}"><div class="grow"><b>${esc(f.categorie||"Frais")}</b><div class="mut">${fdate(f.date)}${f.note?" · "+esc(f.note):""}</div></div><span class="amt out">−${fcfa(f.montant)}</span></div>`}))].sort((a,c)=>(c.d||"").localeCompare(a.d||"")).map(x=>x.h).join("") : `<div class="empty">Aucun achat ni frais ce mois</div>`}</div>
-  <div class="mut" style="font-size:12px;margin:4px 2px 12px">Marge nette = ventes (après remises) − coût d'achat des batteries vendues (prix + frais d'achat, en coût moyen) − frais du mois. Les achats de stock ne sont pas des pertes : ils deviennent un coût seulement quand la batterie est vendue.</div>`;
+  <div class="mut" style="font-size:12px;margin:4px 2px 12px">Marge nette = ventes (après remises) − coût d'achat des batteries vendues (prix + frais d'achat, en coût moyen) − charges du mois. Les achats de stock ne sont pas des pertes : ils deviennent un coût seulement quand la batterie est vendue.</div>`;
   const on=(id,f)=>{ if($(id)) $(id).onclick=f; };
   on("bFirst",()=>formBatModele()); on("bV",()=>formBatVente()); on("bA",()=>formBatAchat()); on("bF",()=>formBatFrais()); on("bM",()=>formBatModele());
   document.querySelectorAll("[data-bm]").forEach(el=>el.onclick=()=>formBatModele(S.batModeles.find(x=>x.id===el.dataset.bm)));
@@ -319,7 +327,7 @@ function modeleOptions(sel){ return S.batModeles.map(m=>`<option value="${esc(m.
 function needModele(){ if(!S.batModeles.length){ toast("Ajoute d'abord un modèle de batterie"); formBatModele(); return true; } return false; }
 function chooseBat(){
   if(!canWrite) return toast("Lecture seule");
-  openSheet(`<h3>Batteries</h3><div style="display:grid;gap:10px;margin-top:12px"><button class="btn" id="x1">+ Une vente</button><button class="btn ghost" id="x2">+ Un achat / réapprovisionnement</button><button class="btn ghost" id="x3">+ Des frais</button><button class="btn ghost" id="x4">+ Un modèle de batterie</button></div>`);
+  openSheet(`<h3>Batteries</h3><div style="display:grid;gap:10px;margin-top:12px"><button class="btn" id="x1">+ Une vente</button><button class="btn ghost" id="x2">+ Un achat / réapprovisionnement</button><button class="btn ghost" id="x3">+ Une charge (carburant, loyer…)</button><button class="btn ghost" id="x4">+ Un modèle de batterie</button></div>`);
   $("x1").onclick=()=>formBatVente(); $("x2").onclick=()=>formBatAchat(); $("x3").onclick=()=>formBatFrais(); $("x4").onclick=()=>formBatModele();
 }
 function formBatModele(m){
@@ -372,10 +380,10 @@ function formBatVente(v){
 }
 function formBatFrais(f){
   f=f||{};
-  openSheet(`<form id="f"><h3>${f.id?"Modifier les frais":"Frais batteries"}</h3><div class="mut">Frais de l'activité batteries, hors prix d'achat</div>
+  openSheet(`<form id="f"><h3>${f.id?"Modifier la charge":"Nouvelle charge batteries"}</h3><div class="mut">Carburant, transport, loyer… (hors prix d'achat des batteries)</div>
   <div class="grid2"><div><label>Date</label><input type="date" name="date" required value="${esc(f.date||today())}"></div><div><label>Montant (FCFA)</label><input type="number" inputmode="numeric" name="montant" required min="0" value="${esc(f.montant??"")}"></div></div>
-  <label>Catégorie</label><select name="categorie">${BAT_CATS.map(c=>`<option ${c===(f.categorie||"Transport")?"selected":""}>${c}</option>`).join("")}</select>
-  <label>Détail</label><textarea name="note" placeholder="facultatif">${esc(f.note||"")}</textarea>
+  <label>Catégorie de charge</label><select name="categorie">${BAT_CATS.map(c=>`<option ${c===(f.categorie||"Carburant")?"selected":""}>${c}</option>`).join("")}</select>
+  <label>Détail</label><textarea name="note" placeholder="ex : 20 L gasoil pour livraison à Gagnoa">${esc(f.note||"")}</textarea>
   ${footer(!!f.id)}</form>`);
   bindForm("batFrais", f, fd=>({ date:fd.date, montant:+fd.montant||0, categorie:fd.categorie, note:fd.note.trim() }));
 }
@@ -386,10 +394,11 @@ function batReportCard(R){
     <div class="rkpi" style="margin-top:8px">
       <div><span class="mut">Ventes</span><b class="in">${fcfa(b.ca)}</b><span class="mut" style="font-size:12px">${b.qte} batterie(s)</span></div>
       <div><span class="mut">Coût des batteries</span><b class="out">${fcfa(b.cout)}</b></div>
-      <div><span class="mut">Frais</span><b class="out">${fcfa(b.tf)}</b></div>
+      <div><span class="mut">Charges</span><b class="out">${fcfa(b.tf)}</b></div>
       <div style="background:var(--pri);color:#fff"><span style="color:#cfe3d9">Marge nette</span><b>${fcfa(b.nette)}</b></div>
     </div>
     ${b.perM.length?`<table class="rtbl" style="margin-top:10px"><tr><th>Modèle</th><th>Qté</th><th>Ventes</th><th>Marge</th></tr>${b.perM.map(x=>`<tr><td>${esc(x.m.nom)}</td><td>${x.q}</td><td>${fcfa(x.ca)}</td><td class="${x.marge>=0?"in":"out"}">${fcfa(x.marge)}</td></tr>`).join("")}</table>`:""}
+    ${b.frais.length?`<table class="rtbl" style="margin-top:12px"><tr><th>Charges batteries</th><th>Montant</th><th>%</th></tr>${catsOf(b.frais).map(([c,m])=>`<tr><td>${esc(c)}</td><td class="out">${fcfa(m)}</td><td>${b.tf?Math.round(m/b.tf*100):0} %</td></tr>`).join("")}<tr class="tot"><td>Total</td><td class="out">${fcfa(b.tf)}</td><td>100 %</td></tr></table>`:""}
   </div>`;
 }
 
